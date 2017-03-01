@@ -145,7 +145,7 @@ static struct ieee80211_rate rtw_rates[] = {
 #define RTW_G_RATES_NUM	12
 
 #define RTW_2G_CHANNELS_NUM 14
-#define RTW_5G_CHANNELS_NUM 37
+#define RTW_5G_CHANNELS_NUM 41
 
 static struct ieee80211_channel rtw_2ghz_channels[] = {
 	CHAN2G(1, 2412, 0),
@@ -170,15 +170,16 @@ static struct ieee80211_channel rtw_5ghz_a_channels[] = {
 	CHAN5G(42, 0),		CHAN5G(44, 0),
 	CHAN5G(46, 0),		CHAN5G(48, 0),
 	CHAN5G(52, 0),		CHAN5G(56, 0),
-	CHAN5G(60, 0),		CHAN5G(64, 0),
+	CHAN5G(58, 0),		CHAN5G(60, 0),
+	CHAN5G(62, 0),		CHAN5G(64, 0),
 	CHAN5G(100, 0),		CHAN5G(104, 0),
 	CHAN5G(108, 0),		CHAN5G(112, 0),
 	CHAN5G(116, 0),		CHAN5G(120, 0),
 	CHAN5G(124, 0),		CHAN5G(128, 0),
 	CHAN5G(132, 0),		CHAN5G(136, 0),
-	CHAN5G(140, 0),		CHAN5G(149, 0),
+	CHAN5G(140, 0),		CHAN5G(144, 0),	CHAN5G(149, 0),
 	CHAN5G(153, 0),		CHAN5G(157, 0),
-	CHAN5G(161, 0),		CHAN5G(165, 0),
+	CHAN5G(161, 0),		CHAN5G(165, 0), CHAN5G(169, 0),
 	CHAN5G(184, 0),		CHAN5G(188, 0),
 	CHAN5G(192, 0),		CHAN5G(196, 0),
 	CHAN5G(200, 0),		CHAN5G(204, 0),
@@ -3459,35 +3460,12 @@ static int cfg80211_rtw_set_txpower(struct wiphy *wiphy,
 	if(value > 40)
 		value = 40;
 
-	pHalData->CurrentTxPwrIdx = value;
-	rtw_hal_set_tx_power_level(padapter, pHalData->CurrentChannel);
-
-#if 0
-	struct iwm_priv *iwm = wiphy_to_iwm(wiphy);
-	int ret;
-
-	switch (type) {
-	case NL80211_TX_POWER_AUTOMATIC:
-		return 0;
-	case NL80211_TX_POWER_FIXED:
-		if (mbm < 0 || (mbm % 100))
-			return -EOPNOTSUPP;
-
-		if (!test_bit(IWM_STATUS_READY, &iwm->status))
-			return 0;
-
-		ret = iwm_umac_set_config_fix(iwm, UMAC_PARAM_TBL_CFG_FIX,
-					      CFG_TX_PWR_LIMIT_USR,
-					      MBM_TO_DBM(mbm) * 2);
-		if (ret < 0)
-			return ret;
-
-		return iwm_tx_power_trigger(iwm);
-	default:
-		IWM_ERR(iwm, "Unsupported power type: %d\n", type);
+	if(type == NL80211_TX_POWER_FIXED) {
+		pHalData->CurrentTxPwrIdx = value;
+		rtw_hal_set_tx_power_level(padapter, pHalData->CurrentChannel);
+	} else
 		return -EOPNOTSUPP;
-	}
-#endif
+
 	return 0;
 }
 
@@ -6360,21 +6338,35 @@ static void rtw_cfg80211_init_ht_capab(_adapter *padapter, struct ieee80211_sta_
 	
 }
 
-static void rtw_cfg80211_create_vht_cap(struct ieee80211_sta_vht_cap *vht_cap)
+static void rtw_cfg80211_create_vht_cap(_adapter *padapter, struct ieee80211_sta_vht_cap *vht_cap)
 {
+#ifdef CONFIG_80211AC_VHT
+	static int highest_rates[] = {433, 866, 1300, 1733}; // 80 MHz
 	u16 mcs_map;
 	int i;
+	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(padapter);
+	struct mlme_priv 		*pmlmepriv = &padapter->mlmepriv;
+	struct vht_priv		*pvhtpriv = &pmlmepriv->vhtpriv;
 
 	vht_cap->vht_supported = 1;
-	vht_cap->cap = IEEE80211_VHT_CAP_RXLDPC;
+	vht_cap->cap = IEEE80211_VHT_CAP_RXLDPC|IEEE80211_VHT_CAP_SHORT_GI_80|IEEE80211_VHT_CAP_TXSTBC|
+		IEEE80211_VHT_CAP_SU_BEAMFORMEE_CAPABLE;
 
 	mcs_map = 0;
 	for (i = 0; i < 8; i++) {
-		mcs_map |= IEEE80211_VHT_MCS_SUPPORT_0_9 << (i*2);
+		if(i < pHalData->NumTotalRFPath)
+			mcs_map |= IEEE80211_VHT_MCS_SUPPORT_0_9 << (i*2);
+		else
+			mcs_map |= IEEE80211_VHT_MCS_NOT_SUPPORTED << (i*2);
 	}
 
+	vht_cap->vht_mcs.tx_mcs_map =
 	vht_cap->vht_mcs.rx_mcs_map = cpu_to_le16(mcs_map);
-	vht_cap->vht_mcs.tx_mcs_map = cpu_to_le16(mcs_map);
+	vht_cap->vht_mcs.tx_highest =
+	vht_cap->vht_mcs.rx_highest = cpu_to_le16(highest_rates[pHalData->NumTotalRFPath-1]);
+#else
+	vht_cap->vht_supported = 0;
+#endif
 }
 
 void rtw_cfg80211_init_wiphy(_adapter *padapter)
@@ -6399,7 +6391,7 @@ void rtw_cfg80211_init_wiphy(_adapter *padapter)
 		bands = wiphy->bands[IEEE80211_BAND_5GHZ];
 		if(bands) {
 			rtw_cfg80211_init_ht_capab(padapter, &bands->ht_cap, IEEE80211_BAND_5GHZ, rf_type);
-			rtw_cfg80211_create_vht_cap(&bands->vht_cap);
+			rtw_cfg80211_create_vht_cap(padapter, &bands->vht_cap);
 		}
 	}
 #endif
