@@ -3929,7 +3929,7 @@ exit:
 
 }
 
-static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe, u8 *buf)
+static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe)
 {
 #define CHAN2FREQ(a) ((a < 14)?(2407+5*a):(5000+5*a))
 
@@ -3982,7 +3982,7 @@ static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe, 
 
 	u16 tmp_16bit = 0;
 
-	u8 data_rate[] = {
+	static u8 data_rate[] = {
 		2, 4, 11, 22, /* CCK */
 		12, 18, 24, 36, 48, 72, 93, 108, /* OFDM */
 		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, /* HT MCS index */
@@ -3998,7 +3998,11 @@ static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe, 
 	struct ieee80211_radiotap_header *rtap_hdr = NULL;
 	u8 *ptr = NULL;
 
+#ifdef CONFIG_RADIOTAP_WITH_RXDESC
+	u8 hdr_buf[128] = {0};
+#else
 	u8 hdr_buf[64] = {0};
+#endif
 	u16 rt_len = 8;
 	u32 tmp_32bit;
 	int i;
@@ -4006,6 +4010,12 @@ static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe, 
 	/* create header */
 	rtap_hdr = (struct ieee80211_radiotap_header *)&hdr_buf[0];
 	rtap_hdr->it_version = PKTHDR_RADIOTAP_VERSION;
+
+#ifdef CONFIG_RTL8814A
+	/* RTL8814AU rx descriptor has no bandwidth, ldpc, stbc and sgi info */
+	/* fixup bandwidth */
+	pattrib->bw = pattrib->phy_info.BandWidth & 0x03;
+#endif
 
 	if(pHalData->NumTotalRFPath>0 && pattrib->physt) {
 		rtap_hdr->it_present |=	(1<<IEEE80211_RADIOTAP_EXT) |
@@ -4024,8 +4034,16 @@ static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe, 
 		}
 		tmp_32bit = (1<<IEEE80211_RADIOTAP_ANTENNA) |
 			(1<<IEEE80211_RADIOTAP_DBM_ANTSIGNAL);
+
+#ifdef CONFIG_RADIOTAP_WITH_RXDESC
+		tmp_32bit |= (1 << IEEE80211_RADIOTAP_VENDOR_NAMESPACE);
+#endif
 		memcpy(&hdr_buf[rt_len], &tmp_32bit, 4);
 		rt_len += 4;
+	} else {
+#ifdef CONFIG_RADIOTAP_WITH_RXDESC
+		rtap_hdr->it_present |= (1 << IEEE80211_RADIOTAP_VENDOR_NAMESPACE);
+#endif
 	}
 	/* tsft */
 	if (pattrib->tsfl) {
@@ -4087,7 +4105,7 @@ static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe, 
 	/*tmp_16bit = CHAN2FREQ(pHalData->CurrentChannel);*/
 	memcpy(&hdr_buf[rt_len], &tmp_16bit, 2);
 	rt_len += 2;
-
+	
 	/* channel flags */
 	tmp_16bit = 0;
 	if (pHalData->CurrentBandType == 0) 
@@ -4157,11 +4175,15 @@ static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe, 
 		hdr_buf[rt_len+1] |= (pattrib->bw & 0x03);
 
 		/* guard interval */
+#ifndef CONFIG_RTL8814A
 		hdr_buf[rt_len] |= BIT2;
+#endif
 		hdr_buf[rt_len+1] |= (pattrib->sgi & 0x01) << 2;
 
 		/* STBC */
+#ifndef CONFIG_RTL8814A
 		hdr_buf[rt_len] |= BIT5;
+#endif
 		hdr_buf[rt_len+1] |= (pattrib->stbc & 0x03) << 5;
 
 		rt_len += 2;
@@ -4188,15 +4210,21 @@ static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe, 
 		tmp_16bit |= BIT8;
 
 		/* STBC */
+#ifndef CONFIG_RTL8814A
 		tmp_16bit |= BIT0;
+#endif
 		hdr_buf[rt_len+2] |= (pattrib->stbc & 0x01);
 
 		/* Guard interval */
+#ifndef CONFIG_RTL8814A
 		tmp_16bit |= BIT2;
+#endif
 		hdr_buf[rt_len+2] |= (pattrib->sgi & 0x01) << 2;
 
 		/* LDPC extra OFDM symbol */
+#ifndef CONFIG_RTL8814A
 		tmp_16bit |= BIT4;
+#endif
 		hdr_buf[rt_len+2] |= (pattrib->ldpc & 0x01) << 4;
 
 		memcpy(&hdr_buf[rt_len], &tmp_16bit, 2);
@@ -4251,21 +4279,52 @@ static sint fill_radiotap_hdr(_adapter *padapter, union recv_frame *precvframe, 
 			rt_len ++;
 		}
 	}
+
+#ifdef CONFIG_RADIOTAP_WITH_RXDESC
+	rt_len += rt_len&1;
+	hdr_buf[rt_len++] = 0xde;
+	hdr_buf[rt_len++] = 0xab;
+	hdr_buf[rt_len++] = 0xbe;
+	hdr_buf[rt_len++] = 0xaf;
+	hdr_buf[rt_len++] = 24;
+	hdr_buf[rt_len++] = 0;
+	_rtw_memcpy(hdr_buf + rt_len, pattrib->rxdesc, RXDESC_SIZE);
+	rt_len += RXDESC_SIZE;
+#endif
+
 	/* push to skb */
-	pskb = (_pkt *)buf;
+	/* read skb information from recv frame */
+	pskb = precvframe->u.hdr.pkt;
+	pskb->len = precvframe->u.hdr.len;
+	pskb->data = precvframe->u.hdr.rx_data;
+	skb_set_tail_pointer(pskb, precvframe->u.hdr.len);
+
 	if (skb_headroom(pskb) < rt_len) {
-		DBG_871X("%s:%d %s headroom is too small.\n", __FILE__, __LINE__, __func__);
-		ret = _FAIL;
-		return ret;
+		pskb = skb_realloc_headroom(pskb, rt_len);
+		if(pskb == NULL) {
+			DBG_871X("%s:%d %s headroom is too small.\n", __FILE__, __LINE__, __func__);
+			ret = _FAIL;
+			return ret;
+		}
+		precvframe->u.hdr.pkt = pskb;
 	}
 
 	ptr = skb_push(pskb, rt_len);
 	if (ptr) {
 		rtap_hdr->it_len = cpu_to_le16(rt_len);
-		memcpy(ptr, rtap_hdr, rt_len);
+		_rtw_memcpy(ptr, rtap_hdr, rt_len);
 	} else {
 		ret = _FAIL;
+		return ret;
 	}
+out:
+	/* write skb information to recv frame */
+	skb_reset_mac_header(pskb);
+	precvframe->u.hdr.len = pskb->len;
+	precvframe->u.hdr.rx_data = pskb->data;
+	precvframe->u.hdr.rx_head = pskb->head;
+	precvframe->u.hdr.rx_tail = skb_tail_pointer(pskb);
+	precvframe->u.hdr.rx_end = skb_end_pointer(pskb);
 
 	return ret;
 
@@ -4279,26 +4338,12 @@ int recv_frame_monitor(_adapter *padapter, union recv_frame *rframe)
 	_queue *pfree_recv_queue = &padapter->recvpriv.free_recv_queue;
 	_pkt *pskb = NULL;
 
-	/* read skb information from recv frame */
-	pskb = rframe->u.hdr.pkt;
-	pskb->len = rframe->u.hdr.len;
-	pskb->data = rframe->u.hdr.rx_data;
-	skb_set_tail_pointer(pskb, rframe->u.hdr.len);
-
 	/* fill radiotap header */
-	if (fill_radiotap_hdr(padapter, rframe, (u8 *)pskb) == _FAIL) {
+	if (fill_radiotap_hdr(padapter, rframe) == _FAIL) {
 		ret = _FAIL;
 		rtw_free_recvframe(rframe, pfree_recv_queue); /* free this recv_frame */
 		goto exit;
 	}
-
-	/* write skb information to recv frame */
-	skb_reset_mac_header(pskb);
-	rframe->u.hdr.len = pskb->len;
-	rframe->u.hdr.rx_data = pskb->data;
-	rframe->u.hdr.rx_head = pskb->head;
-	rframe->u.hdr.rx_tail = skb_tail_pointer(pskb);
-	rframe->u.hdr.rx_end = skb_end_pointer(pskb);
 
 	if (!RTW_CANNOT_RUN(padapter)) {
 		/* indicate this recv_frame */
@@ -4524,7 +4569,6 @@ _recv_data_drop:
 }
 
 
-int recv_func(_adapter *padapter, union recv_frame *rframe);
 int recv_func(_adapter *padapter, union recv_frame *rframe)
 {
 	int ret;
@@ -4538,24 +4582,25 @@ int recv_func(_adapter *padapter, union recv_frame *rframe)
 		recv_frame_monitor(padapter, rframe);
 		ret = _SUCCESS;
 		goto exit;
-	} else
+	} else {
+		/* check if need to handle uc_swdec_pending_queue*/
+		if (check_fwstate(mlmepriv, WIFI_STATION_STATE) && psecuritypriv->busetkipkey)
+		{
+			union recv_frame *pending_frame;
+			int cnt = 0;
 
-	/* check if need to handle uc_swdec_pending_queue*/
-	if (check_fwstate(mlmepriv, WIFI_STATION_STATE) && psecuritypriv->busetkipkey)
-	{
-		union recv_frame *pending_frame;
-		int cnt = 0;
+			while((pending_frame=rtw_alloc_recvframe(&padapter->recvpriv.uc_swdec_pending_queue))) {
+				cnt++;
+				DBG_COUNTER(padapter->rx_logs.core_rx_dequeue);
+				recv_func_posthandle(padapter, pending_frame);
+			}
 
-		while((pending_frame=rtw_alloc_recvframe(&padapter->recvpriv.uc_swdec_pending_queue))) {
-			cnt++;
-			DBG_COUNTER(padapter->rx_logs.core_rx_dequeue);
-			recv_func_posthandle(padapter, pending_frame);
+			if (cnt)
+				DBG_871X(FUNC_ADPT_FMT" dequeue %d from uc_swdec_pending_queue\n",
+					FUNC_ADPT_ARG(padapter), cnt);
 		}
-
-		if (cnt)
-			DBG_871X(FUNC_ADPT_FMT" dequeue %d from uc_swdec_pending_queue\n",
-				FUNC_ADPT_ARG(padapter), cnt);
 	}
+
 
 	DBG_COUNTER(padapter->rx_logs.core_rx);
 	ret = recv_func_prehandle(padapter, rframe);
