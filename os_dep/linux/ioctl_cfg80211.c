@@ -4110,7 +4110,7 @@ static int
 		break;
 	default:
 		ret = -ENODEV;
-		DBG_871X(FUNC_NDEV_FMT" remove monitor interface\n", FUNC_NDEV_ARG(ndev));
+		DBG_871X("Unsupported interface type\n");
 	}
 
 	DBG_871X("%s ndev:%p, ret:%d\n", __func__, ndev, ret);
@@ -4154,6 +4154,8 @@ static int cfg80211_rtw_del_virtual_intf(struct wiphy *wiphy,
 		pwdev_priv->ifname_mon[0] = '\0';
 		DBG_871X(FUNC_NDEV_FMT" remove monitor interface\n", FUNC_NDEV_ARG(ndev));
 	}
+
+	if (adapter) adapter->pnetdev = NULL;
 
 exit:
 	return ret;
