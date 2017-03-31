@@ -14,7 +14,7 @@ EXTRA_CFLAGS += -Wno-unused-parameter
 EXTRA_CFLAGS += -Wno-unused-function
 EXTRA_CFLAGS += -Wno-unused
 #EXTRA_CFLAGS += -Wno-uninitialized
-EXTRA_CFLAGS += -Wno-error=date-time	# Fix compile error on gcc 4.9 and later
+#EXTRA_CFLAGS += -Wno-error=date-time	# Fix compile error on gcc 4.9 and later
 
 EXTRA_CFLAGS += -I$(src)/include
 EXTRA_CFLAGS += -I$(src)/hal/phydm
@@ -158,6 +158,8 @@ endif
 
 ifeq ($(DEBUG), 1)
 EXTRA_CFLAGS += -DDBG=1 -DCONFIG_DEBUG -DCONFIG_DBG_COUNTER -DCONFIG_RADIOTAP_WITH_RXDESC
+else ifeq ($(DEBUG), 2)
+EXTRA_CFLAGS += -DDBG=1 -DCONFIG_DEBUG -DCONFIG_DBG_COUNTER -DCONFIG_RADIOTAP_WITH_RXDESC -DCONFIG_DEBUG_RTL871X
 else
 EXTRA_CFLAGS += -DDBG=0
 endif
